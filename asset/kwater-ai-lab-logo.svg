@@ -1,8 +1,0 @@
-<svg width="640" height="160" viewBox="0 0 640 160" fill="none" xmlns="http://www.w3.org/2000/svg">
-  <rect width="640" height="160" rx="24" fill="#0A6EB4"/>
-  <circle cx="96" cy="80" r="52" fill="#FFFFFF"/>
-  <path d="M70 90C90 70 110 70 130 90" stroke="#0A6EB4" stroke-width="12" stroke-linecap="round"/>
-  <path d="M72 106C92 86 112 86 132 106" stroke="#0A6EB4" stroke-width="8" stroke-linecap="round" opacity="0.8"/>
-  <text x="180" y="78" font-family="Arial, Helvetica, sans-serif" font-size="36" fill="#FFFFFF" font-weight="700">K-water AI Lab</text>
-  <text x="180" y="118" font-family="Arial, Helvetica, sans-serif" font-size="18" fill="#DCEEFF">물관리 전문 연구 요약 · 퀴즈 챗봇</text>
-</svg>
