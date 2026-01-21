@@ -1,3 +1,4 @@
+import base64
 import os
 from pathlib import Path
 from dataclasses import dataclass
@@ -171,8 +172,26 @@ def get_source_text(primary_url: str, fallback_query: str) -> Optional[SourceRes
     return None
 
 
+def set_source_state(source: SourceResult) -> None:
+    st.session_state.report_text = source.text
+    st.session_state.source_url = source.url
+    st.session_state.pdf_links = []
+    try:
+        html = fetch_html(source.url)
+        st.session_state.pdf_links = extract_pdf_links(source.url, html)
+    except requests.RequestException:
+        st.session_state.pdf_links = []
+
+
 def get_openai_client(api_key: str) -> OpenAI:
     return OpenAI(api_key=api_key)
+
+
+def get_secret_value(key: str) -> Optional[str]:
+    try:
+        return st.secrets.get(key)
+    except Exception:
+        return None
 
 
 def build_summary_prompt(text: str, language: str, max_bullets: int) -> List[dict]:
@@ -210,14 +229,22 @@ st.set_page_config(page_title=APP_TITLE, page_icon="💧", layout="wide")
 
 with st.sidebar:
     if LOGO_PATH.exists():
-        st.image(LOGO_PATH.read_bytes(), use_column_width=True)
+        try:
+            svg_text = LOGO_PATH.read_text(encoding="utf-8")
+            encoded = base64.b64encode(svg_text.encode("utf-8")).decode("utf-8")
+            st.markdown(
+                f'<img src="data:image/svg+xml;base64,{encoded}" style="width:100%; height:auto;" />',
+                unsafe_allow_html=True,
+            )
+        except OSError:
+            st.markdown("**K-water AI Lab**")
     else:
         st.markdown("**K-water AI Lab**")
     st.markdown("### 설정")
     api_key = st.text_input(
         "OpenAI API Key",
         type="password",
-        value=st.secrets.get("OPENAI_API_KEY", os.getenv("OPENAI_API_KEY", "")),
+        value=get_secret_value("OPENAI_API_KEY") or os.getenv("OPENAI_API_KEY", ""),
         help="Streamlit Cloud에서는 Secrets에 저장된 키를 자동으로 불러옵니다.",
     )
     model = st.text_input("모델", value="gpt-4o-mini")
@@ -269,27 +296,55 @@ if "messages" not in st.session_state:
     st.session_state.messages = []
 if "pdf_links" not in st.session_state:
     st.session_state.pdf_links = []
+if "alio_candidates" not in st.session_state:
+    st.session_state.alio_candidates = []
 
 if load_button:
     if not alio_url:
         status_box.warning("ALIO 보고서 URL을 입력하세요.")
     else:
         status_box.info("보고서를 불러오는 중입니다...")
+        st.session_state.alio_candidates = []
+        if looks_like_alio_listing(alio_url):
+            try:
+                listing_html = fetch_html(alio_url)
+                st.session_state.alio_candidates = extract_alio_report_links(alio_url, listing_html)
+            except requests.RequestException:
+                st.session_state.alio_candidates = []
         source = get_source_text(alio_url, fallback_query)
         if not source:
-            status_box.error("보고서를 찾지 못했습니다. URL 또는 검색 쿼리를 확인하세요.")
+            if st.session_state.alio_candidates:
+                status_box.warning("보고서를 찾지 못했습니다. 아래 목록에서 보고서를 선택해 주세요.")
+            else:
+                status_box.error("보고서를 찾지 못했습니다. URL 또는 검색 쿼리를 확인하세요.")
         else:
-            st.session_state.report_text = source.text
-            st.session_state.source_url = source.url
-            st.session_state.pdf_links = []
-            try:
-                html = fetch_html(source.url)
-                st.session_state.pdf_links = extract_pdf_links(source.url, html)
-            except requests.RequestException:
-                st.session_state.pdf_links = []
+            set_source_state(source)
             fallback_label = "(대체 검색 결과)" if source.is_fallback else "(ALIO 원문)"
             status_box.success(f"보고서 로딩 완료 {fallback_label}")
             source_box.markdown(f"**사용한 소스:** {source.url}")
+
+st.divider()
+
+st.subheader("보고서 목록")
+if st.session_state.alio_candidates:
+    selected_url = st.selectbox(
+        "목록에서 보고서를 선택하세요.",
+        st.session_state.alio_candidates,
+        format_func=lambda url: url.replace("https://", ""),
+    )
+    if st.button("선택한 보고서 불러오기"):
+        status_box.info("선택한 보고서를 불러오는 중입니다...")
+        st.session_state.alio_url = selected_url
+        source = get_source_text(selected_url, fallback_query)
+        if not source:
+            status_box.error("선택한 보고서를 불러오지 못했습니다. 다른 항목을 선택해 주세요.")
+        else:
+            set_source_state(source)
+            fallback_label = "(대체 검색 결과)" if source.is_fallback else "(ALIO 원문)"
+            status_box.success(f"보고서 로딩 완료 {fallback_label}")
+            source_box.markdown(f"**사용한 소스:** {source.url}")
+else:
+    st.info("검색 결과 목록이 없습니다. ALIO 검색 결과 URL을 입력해 주세요.")
 
 st.divider()
 
