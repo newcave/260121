@@ -62,6 +62,20 @@ def fetch_html(url: str, timeout: int = 12) -> str:
     return response.text
 
 
+@st.cache_data(show_spinner=False)
+def fetch_binary(url: str, timeout: int = 20) -> tuple[bytes, str]:
+    headers = {
+        "User-Agent": (
+            "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 "
+            "(KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
+        )
+    }
+    response = requests.get(url, headers=headers, timeout=timeout)
+    response.raise_for_status()
+    mimetype = response.headers.get("Content-Type", "application/pdf").split(";")[0]
+    return response.content, mimetype
+
+
 def extract_alio_report_links(page_url: str, html: str, max_links: int = 8) -> List[str]:
     soup = BeautifulSoup(html, "lxml")
     base_url = f"{urlparse(page_url).scheme}://{urlparse(page_url).netloc}"
@@ -69,6 +83,26 @@ def extract_alio_report_links(page_url: str, html: str, max_links: int = 8) -> L
     for anchor in soup.select("a[href]"):
         href = anchor.get("href", "")
         if any(token in href for token in ("itemDetail.do", "itemDetail", "itemDetailInfo")):
+            candidates.append(urljoin(base_url, href))
+        if len(candidates) >= max_links:
+            break
+    seen = set()
+    deduped = []
+    for link in candidates:
+        if link not in seen:
+            seen.add(link)
+            deduped.append(link)
+    return deduped
+
+
+def extract_pdf_links(page_url: str, html: str, max_links: int = 6) -> List[str]:
+    soup = BeautifulSoup(html, "lxml")
+    base_url = f"{urlparse(page_url).scheme}://{urlparse(page_url).netloc}"
+    candidates = []
+    for anchor in soup.select("a[href]"):
+        href = anchor.get("href", "")
+        lower_href = href.lower()
+        if ".pdf" in lower_href or "filedown" in lower_href or "download" in lower_href:
             candidates.append(urljoin(base_url, href))
         if len(candidates) >= max_links:
             break
@@ -233,6 +267,8 @@ if "quiz" not in st.session_state:
     st.session_state.quiz = ""
 if "messages" not in st.session_state:
     st.session_state.messages = []
+if "pdf_links" not in st.session_state:
+    st.session_state.pdf_links = []
 
 if load_button:
     if not alio_url:
@@ -245,9 +281,36 @@ if load_button:
         else:
             st.session_state.report_text = source.text
             st.session_state.source_url = source.url
+            st.session_state.pdf_links = []
+            try:
+                html = fetch_html(source.url)
+                st.session_state.pdf_links = extract_pdf_links(source.url, html)
+            except requests.RequestException:
+                st.session_state.pdf_links = []
             fallback_label = "(대체 검색 결과)" if source.is_fallback else "(ALIO 원문)"
             status_box.success(f"보고서 로딩 완료 {fallback_label}")
             source_box.markdown(f"**사용한 소스:** {source.url}")
+
+st.divider()
+
+st.subheader("PDF 다운로드")
+if st.session_state.pdf_links:
+    st.caption("ALIO 페이지에서 PDF 링크를 발견하면 바로 다운로드할 수 있습니다.")
+    for idx, link in enumerate(st.session_state.pdf_links, start=1):
+        filename = Path(urlparse(link).path).name or f"report_{idx}.pdf"
+        try:
+            data, mimetype = fetch_binary(link)
+            st.download_button(
+                label=f"PDF 다운로드 {idx}",
+                data=data,
+                file_name=filename,
+                mime=mimetype,
+            )
+            st.markdown(f"[원문 링크]({link})")
+        except requests.RequestException:
+            st.warning(f"PDF를 불러오지 못했습니다: {link}")
+else:
+    st.info("보고서에서 PDF 링크를 찾지 못했습니다. 다른 페이지를 시도해 주세요.")
 
 st.divider()
 
