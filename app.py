@@ -2,7 +2,7 @@ import os
 from pathlib import Path
 from dataclasses import dataclass
 from typing import List, Optional
-from urllib.parse import quote
+from urllib.parse import quote, urljoin, urlparse
 
 import requests
 import streamlit as st
@@ -12,6 +12,11 @@ from openai import OpenAI
 APP_TITLE = "K-water 연구보고서 요약 & 퀴즈 챗봇"
 PERSONA = "물관리 전문 K-water연구원"
 LOGO_PATH = Path("assets/kwater-ai-lab-logo.svg")
+ALIO_SEARCH_URL = (
+    "https://www.alio.go.kr/search/searchTotal.do?word=%ED%95%9C%EA%B5%AD%EC%88%98%EC%9E%90%EC%9B%90%EA%B3%B5%EC%82%AC+%EC%97%B0%EA%B5%AC%EB%B3%B4%EA%B3%A0%EC%84%9C"
+    "&apbaNm=&targetList=jeonggi%2Csusi%2CinfoCenter%2Cemployment%2Cbid%2Cnotice&attachFileYn=Y&sortType=LATEST"
+)
+ALIO_ORGAN_LIST_URL = "https://alio.go.kr/item/itemOrganList.do?apbaId=C0221&reportFormRootNo=B1040"
 
 
 @dataclass
@@ -45,6 +50,41 @@ def fetch_url_text(url: str, timeout: int = 12) -> Optional[str]:
     return cleaned
 
 
+def fetch_html(url: str, timeout: int = 12) -> str:
+    headers = {
+        "User-Agent": (
+            "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 "
+            "(KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
+        )
+    }
+    response = requests.get(url, headers=headers, timeout=timeout)
+    response.raise_for_status()
+    return response.text
+
+
+def extract_alio_report_links(page_url: str, html: str, max_links: int = 8) -> List[str]:
+    soup = BeautifulSoup(html, "lxml")
+    base_url = f"{urlparse(page_url).scheme}://{urlparse(page_url).netloc}"
+    candidates = []
+    for anchor in soup.select("a[href]"):
+        href = anchor.get("href", "")
+        if any(token in href for token in ("itemDetail.do", "itemDetail", "itemDetailInfo")):
+            candidates.append(urljoin(base_url, href))
+        if len(candidates) >= max_links:
+            break
+    seen = set()
+    deduped = []
+    for link in candidates:
+        if link not in seen:
+            seen.add(link)
+            deduped.append(link)
+    return deduped
+
+
+def looks_like_alio_listing(url: str) -> bool:
+    return "searchTotal.do" in url or "itemOrganList.do" in url
+
+
 def search_kwater_reports(query: str, max_results: int = 5) -> List[str]:
     search_url = f"https://duckduckgo.com/html/?q={quote(query)}"
     response = requests.get(search_url, timeout=12)
@@ -61,6 +101,20 @@ def search_kwater_reports(query: str, max_results: int = 5) -> List[str]:
 
 
 def get_source_text(primary_url: str, fallback_query: str) -> Optional[SourceResult]:
+    if looks_like_alio_listing(primary_url):
+        try:
+            html = fetch_html(primary_url)
+            candidates = extract_alio_report_links(primary_url, html)
+        except requests.RequestException:
+            candidates = []
+        for candidate in candidates:
+            try:
+                text = fetch_url_text(candidate)
+            except requests.RequestException:
+                continue
+            if text:
+                return SourceResult(url=candidate, text=text, is_fallback=False)
+
     try:
         text = fetch_url_text(primary_url)
         if text:
@@ -143,7 +197,20 @@ col_left, col_right = st.columns([2, 1])
 
 with col_left:
     st.subheader("보고서 불러오기")
-    alio_url = st.text_input("ALIO 보고서 URL", placeholder="https://www.alio.go.kr/...", key="alio_url")
+    st.markdown("공식 보고서 검색 페이지 또는 검색 결과 URL을 입력하세요.")
+    quick_link_col1, quick_link_col2 = st.columns(2)
+    with quick_link_col1:
+        if st.button("ALIO 보고서 검색", use_container_width=True):
+            st.session_state.alio_url = ALIO_ORGAN_LIST_URL
+    with quick_link_col2:
+        if st.button("ALIO 통합검색 예시", use_container_width=True):
+            st.session_state.alio_url = ALIO_SEARCH_URL
+    alio_url = st.text_input(
+        "ALIO 보고서 URL",
+        value=st.session_state.get("alio_url", ""),
+        placeholder=ALIO_ORGAN_LIST_URL,
+        key="alio_url",
+    )
     fallback_query = st.text_input(
         "대체 검색 쿼리",
         value="K-water 연구보고서 생산보고서 논문 물관리",
